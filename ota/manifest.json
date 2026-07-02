@@ -2,8 +2,8 @@
   "Configurations": [
     {
       "Board": "ESP32_DEV",
-      "Version": "1.0.2",
-      "URL": "https://raw.githubusercontent.com/GhostService/esp32-desk-display/main/ota/desk_display-1.0.2.bin"
+      "Version": "1.0.3",
+      "URL": "https://raw.githubusercontent.com/GhostService/esp32-desk-display/main/ota/desk_display-1.0.3.bin"
     }
   ]
 }
