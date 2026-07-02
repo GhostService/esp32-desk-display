@@ -231,14 +231,14 @@ small{color:#999}h2{margin-top:0}hr{border-color:#333;margin:1.5em 0}
 <option value="2">Weather</option>
 <option value="3">Message</option>
 </select></label>
-<label>Countdown target<input type="datetime-local" id="countdown"></label>
-<label>Weather city<input id="city" placeholder="e.g. Portland"></label>
-<label>Temperature unit<select id="unit">
+<label data-modes="1">Countdown target<input type="datetime-local" id="countdown"></label>
+<label data-modes="2">Weather city<input id="city" placeholder="e.g. Portland"></label>
+<label data-modes="2">Temperature unit<select id="unit">
 <option value="C">Celsius</option>
 <option value="F">Fahrenheit</option>
 </select></label>
-<label>Message<input id="message"></label>
-<label>Time zone<select id="tz">
+<label data-modes="3">Message<input id="message"></label>
+<label data-modes="0,1">Time zone<select id="tz">
 <option value="UTC0">UTC</option>
 <option value="EST5EDT,M3.2.0,M11.1.0">US Eastern</option>
 <option value="CST6CDT,M3.2.0,M11.1.0">US Central</option>
@@ -264,8 +264,18 @@ small{color:#999}h2{margin-top:0}hr{border-color:#333;margin:1.5em 0}
 <script>
 const $=id=>document.getElementById(id);
 const tzSel=$('tz'),tzC=$('tzcustom');
-tzSel.onchange=()=>{tzC.style.display=tzSel.value==='custom'?'block':'none';};
 const tzValue=()=>tzSel.value==='custom'?tzC.value:tzSel.value;
+// Show only the inputs that apply to the selected mode (data-modes lists the
+// mode numbers each field belongs to); tzcustom follows the tz field.
+function updateFields(){
+ const m=$('mode').value;
+ document.querySelectorAll('[data-modes]').forEach(el=>{
+  el.style.display=el.getAttribute('data-modes').split(',').includes(m)?'':'none';
+ });
+ tzC.style.display=(tzSel.closest('label').style.display!=='none'&&tzSel.value==='custom')?'block':'none';
+}
+$('mode').onchange=updateFields;
+tzSel.onchange=updateFields;
 function toast(t){$('toast').textContent=t;setTimeout(()=>$('toast').textContent='',4000);}
 async function load(){
  const c=await(await fetch('/api/config')).json();
@@ -273,9 +283,10 @@ async function load(){
  $('city').value=c.city;$('message').value=c.message;
  $('unit').value=c.fahrenheit?'F':'C';
  if([...tzSel.options].some(o=>o.value===c.tz)){tzSel.value=c.tz;}
- else{tzSel.value='custom';tzC.value=c.tz;tzC.style.display='block';}
+ else{tzSel.value='custom';tzC.value=c.tz;}
  $('ipline').textContent='Device: '+c.ip+'  |  WiFi: '+c.wifiSsid;
  $('otaline').textContent='Firmware v'+c.version+'  |  Update: '+c.otaStatus;
+ updateFields();
 }
 $('f').onsubmit=async e=>{
  e.preventDefault();
