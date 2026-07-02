@@ -27,7 +27,7 @@
 // publishes ota/manifest.json + ota/desk_display.bin to the repo (served via
 // raw.githubusercontent.com because ESP32-OTA-Pull's HTTP client does not
 // follow the 302 redirects GitHub release-asset URLs use).
-constexpr const char* kFirmwareVersion = "1.0.1";
+constexpr const char* kFirmwareVersion = "1.0.2";
 constexpr const char* kOtaManifestUrl =
     "https://raw.githubusercontent.com/GhostService/esp32-desk-display/main/"
     "ota/manifest.json";
@@ -287,9 +287,24 @@ $('f').onsubmit=async e=>{
  toast(r.ok?'Saved - display updated':'Save failed');
 };
 $('update').onclick=async()=>{
- await fetch('/api/checkupdate',{method:'POST'});
- toast('Checking - progress shows on the display');
- setTimeout(load,12000);
+ const b=$('update');b.disabled=true;
+ $('toast').textContent='Checking for update...';
+ try{await fetch('/api/checkupdate',{method:'POST'});}catch(e){}
+ // The device blocks while checking/flashing and reboots after a successful
+ // update, so fetches fail for a while; poll until it answers with a result.
+ for(let i=0;i<40;i++){
+  await new Promise(r=>setTimeout(r,3000));
+  try{
+   const c=await(await fetch('/api/config')).json();
+   if(c.otaStatus==='checking')continue;
+   await load();
+   toast('v'+c.version+' - '+c.otaStatus);
+   b.disabled=false;
+   return;
+  }catch(e){}
+ }
+ b.disabled=false;
+ toast('No response from device - refresh this page');
 };
 $('wifireset').onclick=async()=>{
  if(!confirm('Forget WiFi and reboot into setup mode?'))return;
@@ -448,6 +463,7 @@ void handleWifiReset() {
 
 void handleCheckUpdate() {
   otaCheckRequested = true;  // picked up by loop(); the check blocks rendering
+  otaStatus = "checking";    // so /api/config polls never show a stale result
   JsonDocument res;
   res["ok"] = true;
   res["status"] = "checking";
@@ -645,9 +661,25 @@ void otaProgress(int offset, int totallength) {
   display.display();
 }
 
-// Checks the manifest and, if it lists a newer version for this board,
-// downloads it, flashes it, and reboots (inside CheckForOTAUpdate).
-// Reaching the switch below means no update was applied.
+// Compares dotted numeric versions; returns <0, 0, >0 like strcmp.
+// ESP32-OTA-Pull compares version strings byte-wise, which sorts
+// "1.0.10" before "1.0.9" — so the manifest check is done here instead.
+int compareVersions(const String& a, const String& b) {
+  unsigned int ia = 0, ib = 0;
+  while (ia < a.length() || ib < b.length()) {
+    long na = 0, nb = 0;
+    while (ia < a.length() && a[ia] != '.') na = na * 10 + (a[ia++] - '0');
+    while (ib < b.length() && b[ib] != '.') nb = nb * 10 + (b[ib++] - '0');
+    if (na != nb) return na < nb ? -1 : 1;
+    ia++;
+    ib++;
+  }
+  return 0;
+}
+
+// Fetches the manifest and, if it lists a newer version for this board,
+// downloads the image, flashes it, and reboots (inside CheckForOTAUpdate).
+// Reaching the bottom switch means an update should have happened but didn't.
 void runOtaCheck() {
   if (apMode || WiFi.status() != WL_CONNECTED) {
     otaStatus = "skipped (no WiFi)";
@@ -659,29 +691,65 @@ void runOtaCheck() {
   showStatus("Checking for", "firmware update...",
              "current v" + String(kFirmwareVersion));
 
+  // The manifest is fetched here (not left to the library) for two reasons:
+  // the cache-busting query defeats raw.githubusercontent's 5-minute CDN
+  // cache (clicking "check" right after a release used to see the previous
+  // manifest and report "up to date"), and the numeric compare above replaces
+  // the library's byte-wise one.
+  String url = String(kOtaManifestUrl) + "?nocache=" + String(millis());
+  int code;
+  String body = httpGetBody(url, &code);
+  if (code != 200) {
+    otaStatus = "manifest HTTP " + String(code);
+    Serial.println("OTA: " + otaStatus);
+    return;
+  }
+  JsonDocument doc;
+  if (deserializeJson(doc, body)) {
+    otaStatus = "bad manifest";
+    Serial.println("OTA: " + otaStatus);
+    return;
+  }
+  String newVersion;
+  for (JsonVariant cfg : doc["Configurations"].as<JsonArray>()) {
+    String board = cfg["Board"] | "";
+    if (board.isEmpty() || board == ARDUINO_BOARD) {
+      newVersion = cfg["Version"] | "";
+      break;
+    }
+  }
+  if (newVersion.isEmpty()) {
+    otaStatus = "no build for this board";
+    Serial.println("OTA: " + otaStatus);
+    return;
+  }
+  if (compareVersions(newVersion, kFirmwareVersion) <= 0) {
+    otaStatus = "up to date (v" + String(kFirmwareVersion) + ")";
+    Serial.println("OTA: " + otaStatus);
+    return;
+  }
+
+  Serial.printf("OTA: updating to v%s\n", newVersion.c_str());
+  showStatus("Updating to", "v" + newVersion, "do not power off");
+  // The newer-version decision is already made above; AllowDowngrades makes
+  // the library act on any version difference so its own byte-wise compare
+  // cannot veto the update. It re-fetches the manifest at the same
+  // cache-busted URL, so it sees the same version this check just did.
   ESP32OTAPull ota;
   ota.SetCallback(otaProgress);
-  int ret = ota.CheckForOTAUpdate(kOtaManifestUrl, kFirmwareVersion,
+  ota.AllowDowngrades(true);
+  int ret = ota.CheckForOTAUpdate(url.c_str(), kFirmwareVersion,
                                   ESP32OTAPull::UPDATE_AND_BOOT);
   switch (ret) {
-    case ESP32OTAPull::NO_UPDATE_AVAILABLE:
-      otaStatus = "up to date";
-      break;
-    case ESP32OTAPull::NO_UPDATE_PROFILE_FOUND:
-      otaStatus = "no build for this board";
-      break;
-    case ESP32OTAPull::JSON_PROBLEM:
-      otaStatus = "bad manifest";
-      break;
     case ESP32OTAPull::WRITE_ERROR:
     case ESP32OTAPull::OTA_UPDATE_FAIL:
-      otaStatus = "update failed";
+      otaStatus = "update to v" + newVersion + " failed";
       break;
     case ESP32OTAPull::HTTP_FAILED:
-      otaStatus = "manifest unreachable";
+      otaStatus = "image unreachable";
       break;
     default:
-      otaStatus = "HTTP error " + String(ret);
+      otaStatus = "update error " + String(ret);
       break;
   }
   Serial.println("OTA: " + otaStatus);

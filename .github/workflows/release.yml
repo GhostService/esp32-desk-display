@@ -80,13 +80,16 @@ jobs:
             ]
           }
           EOF
+          # The .bin gets a versioned filename: raw.githubusercontent caches
+          # URLs for 5 minutes, so reusing one filename would let a fresh
+          # manifest point at a stale cached image right after a release.
           cat > dist/manifest-device.json <<EOF
           {
             "Configurations": [
               {
                 "Board": "ESP32_DEV",
                 "Version": "$VERSION",
-                "URL": "https://raw.githubusercontent.com/$GITHUB_REPOSITORY/main/ota/desk_display.bin"
+                "URL": "https://raw.githubusercontent.com/$GITHUB_REPOSITORY/main/ota/desk_display-$VERSION.bin"
               }
             ]
           }
@@ -103,14 +106,18 @@ jobs:
             --notes "Firmware ${{ steps.ver.outputs.version }}. Devices pick this up automatically via OTA within an hour."
 
       - name: Publish OTA files to main (device update channel)
+        # Old images are dropped in the same commit; a device holding a stale
+        # cached manifest just gets a 404 and retries within the hour.
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git fetch origin main
           git checkout -B main origin/main
+          VERSION="${{ steps.ver.outputs.version }}"
+          git rm -q --ignore-unmatch 'ota/desk_display*.bin'
           mkdir -p ota
-          cp desk_display.bin ota/desk_display.bin
+          cp desk_display.bin "ota/desk_display-$VERSION.bin"
           cp dist/manifest-device.json ota/manifest.json
-          git add ota/desk_display.bin ota/manifest.json
+          git add ota
           git commit -m "OTA: publish firmware $GITHUB_REF_NAME"
           git push origin main
