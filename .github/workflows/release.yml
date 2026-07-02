@@ -1,0 +1,116 @@
+name: Release firmware
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  FQBN: esp32:esp32:esp32:PartitionScheme=min_spiffs
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the tagged commit
+        uses: actions/checkout@v4
+
+      - name: Derive version from tag
+        id: ver
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify firmware version matches the tag
+        # A mismatched kFirmwareVersion would make devices re-flash the same
+        # image every check (the manifest would always look "newer").
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          grep -Fq "kFirmwareVersion = \"$VERSION\"" desk_display/desk_display.ino || {
+            echo "::error::kFirmwareVersion in desk_display.ino does not match tag $GITHUB_REF_NAME"
+            exit 1
+          }
+          [ "$(tr -d '[:space:]' < version.txt)" = "$VERSION" ] || {
+            echo "::error::version.txt does not match tag $GITHUB_REF_NAME"
+            exit 1
+          }
+
+      - name: Install arduino-cli
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Install ESP32 core
+        run: |
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32
+
+      - name: Install libraries
+        run: |
+          arduino-cli lib install \
+            "Adafruit SSD1306" \
+            "Adafruit GFX Library" \
+            "ArduinoJson" \
+            "ESP32-OTA-Pull"
+
+      - name: Compile firmware (OTA partition scheme)
+        run: |
+          arduino-cli compile -b "$FQBN" --output-dir build desk_display
+          cp build/desk_display.ino.bin desk_display.bin
+
+      - name: Generate OTA manifests
+        # Two copies with the field names ESP32-OTA-Pull expects
+        # (Configurations / Board / Version / URL):
+        #  - dist/manifest.json is attached to the Release and points at the
+        #    release .bin asset.
+        #  - dist/manifest-device.json is what devices actually poll; it is
+        #    published to ota/ on main and points at the raw.githubusercontent
+        #    copy of the .bin, because ESP32-OTA-Pull's HTTP client does not
+        #    follow the 302 redirect that release-asset URLs return.
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          mkdir -p dist
+          cat > dist/manifest.json <<EOF
+          {
+            "Configurations": [
+              {
+                "Board": "ESP32_DEV",
+                "Version": "$VERSION",
+                "URL": "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/desk_display.bin"
+              }
+            ]
+          }
+          EOF
+          cat > dist/manifest-device.json <<EOF
+          {
+            "Configurations": [
+              {
+                "Board": "ESP32_DEV",
+                "Version": "$VERSION",
+                "URL": "https://raw.githubusercontent.com/$GITHUB_REPOSITORY/main/ota/desk_display.bin"
+              }
+            ]
+          }
+          EOF
+
+      - name: Create GitHub Release and attach assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            desk_display.bin \
+            dist/manifest.json \
+            --title "Desk Display $GITHUB_REF_NAME" \
+            --notes "Firmware ${{ steps.ver.outputs.version }}. Devices pick this up automatically via OTA within an hour."
+
+      - name: Publish OTA files to main (device update channel)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout -B main origin/main
+          mkdir -p ota
+          cp desk_display.bin ota/desk_display.bin
+          cp dist/manifest-device.json ota/manifest.json
+          git add ota/desk_display.bin ota/manifest.json
+          git commit -m "OTA: publish firmware $GITHUB_REF_NAME"
+          git push origin main

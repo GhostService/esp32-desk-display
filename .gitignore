@@ -1,0 +1,14 @@
+# Arduino build artifacts
+build/
+*.bin
+# ...except the OTA payload, which is served from the repo via raw URLs
+!ota/*.bin
+*.elf
+*.map
+*.hex
+
+# arduino-cli local caches
+.arduino/
+
+# macOS
+.DS_Store
