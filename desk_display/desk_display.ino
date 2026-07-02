@@ -580,7 +580,7 @@ void fetchWeather() {
     }
     JsonVariant result = doc["results"][0];
     if (result.isNull()) {
-      setWeatherError("City not found");
+      setWeatherError("ERROR: City Not Found.");
       return;
     }
     geoLat = result["latitude"].as<double>();
