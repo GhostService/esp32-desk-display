@@ -27,7 +27,7 @@
 // publishes ota/manifest.json + ota/desk_display.bin to the repo (served via
 // raw.githubusercontent.com because ESP32-OTA-Pull's HTTP client does not
 // follow the 302 redirects GitHub release-asset URLs use).
-constexpr const char* kFirmwareVersion = "1.0.0";
+constexpr const char* kFirmwareVersion = "1.0.1";
 constexpr const char* kOtaManifestUrl =
     "https://raw.githubusercontent.com/GhostService/esp32-desk-display/main/"
     "ota/manifest.json";
